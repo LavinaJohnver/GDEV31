@@ -1,0 +1,2 @@
+﻿  glad.c
+C:\Users\Dell\Downloads\Exercise03.1-VS2019\Exercise03-Polyline\glad.c(25,10): fatal error C1083: Cannot open include file: 'glad/glad.h': No such file or directory
