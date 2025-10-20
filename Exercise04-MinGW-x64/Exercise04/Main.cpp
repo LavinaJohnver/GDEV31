@@ -33,11 +33,16 @@ struct Point {
 Point getNormalisedPerpAxis(const Point &currPoint, const Point &nextPoint) {
 	const float xAxis = -(nextPoint.x-currPoint.x);
 	const float yAxis = nextPoint.y-currPoint.y;
-	const float mag = hypot(xAxis, yAxis);
+	const float mag = std::hypot(xAxis, yAxis);
 
 	Point ret;
-	ret.x - xAxis/mag;
-	ret.y = yAxis/mag;
+	if (mag == 0) {
+        ret.x = 0.0f;
+        ret.y = 0.0f;
+    } else {
+        ret.x = xAxis / mag;
+        ret.y = yAxis / mag;
+    }
 
 	return ret;
 }
@@ -47,23 +52,28 @@ void projectPoints(const std::vector<Point> &shapeA, const std::vector<Point> &s
     projA.clear();
     projB.clear();
 
-    for (size_t i = 0; i < shapeA.size(); i++) {
-        const float projectionA = Point::dot(normedAxis, shapeA[i]);
-        const float projectionB = Point::dot(normedAxis, shapeB[i]);
-        projA.push_back(projectionA);
-        projB.push_back(projectionB);
+	projA.reserve(shapeA.size());
+    projB.reserve(shapeB.size());
+
+
+	for (size_t i = 0; i < shapeA.size(); i++) {
+        projA.push_back(Point::dot(normedAxis, shapeA[i]));
+    }
+    for (size_t i = 0; i < shapeB.size(); i++) {
+        projB.push_back(Point::dot(normedAxis, shapeB[i]));
     }
 }
 
 // Check if the projections of two polygons overlap
 bool isOverlapping(const std::vector<float> &projA, const std::vector<float> &projB) {
-    const float maxProjA = *std::max_element(projA.begin(), projB.end());
+	if (projA.empty() || projB.empty()) return false;
+    const float maxProjA = *std::max_element(projA.begin(), projA.end());
     const float minProjA = *std::min_element(projA.begin(), projA.end());
     const float maxProjB = *std::max_element(projB.begin(), projB.end());
-    const float minProjB = *std::min_element(projA.begin(), projB.end());
+    const float minProjB = *std::min_element(projB.begin(), projB.end());
 
     // True if projection overlaps but does not necessarily mean the polygons are intersecting yet
-    return !(maxProjA < minProjB or maxProjB < minProjA);
+    return !(maxProjA < minProjB || maxProjB < minProjA);
 }
 
 /**
