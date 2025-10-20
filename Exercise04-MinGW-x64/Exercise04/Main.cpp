@@ -4,6 +4,7 @@
 #define _USE_MATH_DEFINES
 #include <cmath>
 #include <vector>
+#include <algorithm>
 
 // IMPORTANT: If you are using Mac, kindly change this to the full path of the test.txt file
 #define INPUT_FILE "test.txt"
@@ -21,7 +22,49 @@ struct Point {
 	 * Y-coordinate of the point
 	 */
 	float y;
+
+	static float dot(Point a, Point b){
+		float d = a.x*b.x + a.y*b.y;
+		return d;
+	}
 };
+
+// Calculate Perpendiclar Edges
+Point getNormalisedPerpAxis(const Point &currPoint, const Point &nextPoint) {
+	const float xAxis = -(nextPoint.x-currPoint.x);
+	const float yAxis = nextPoint.y-currPoint.y;
+	const float mag = hypot(xAxis, yAxis);
+
+	Point ret;
+	ret.x - xAxis/mag;
+	ret.y = yAxis/mag;
+
+	return ret;
+}
+
+// Project the vertices of each polygon onto a axis
+void projectPoints(const std::vector<Point> &shapeA, const std::vector<Point> &shapeB, const Point &normedAxis, std::vector<float> &projA, std::vector<float> &projB) {
+    projA.clear();
+    projB.clear();
+
+    for (size_t i = 0; i < shapeA.size(); i++) {
+        const float projectionA = Point::dot(normedAxis, shapeA[i]);
+        const float projectionB = Point::dot(normedAxis, shapeB[i]);
+        projA.push_back(projectionA);
+        projB.push_back(projectionB);
+    }
+}
+
+// Check if the projections of two polygons overlap
+bool isOverlapping(const std::vector<float> &projA, const std::vector<float> &projB) {
+    const float maxProjA = *std::max_element(projA.begin(), projB.end());
+    const float minProjA = *std::min_element(projA.begin(), projA.end());
+    const float maxProjB = *std::max_element(projB.begin(), projB.end());
+    const float minProjB = *std::min_element(projA.begin(), projB.end());
+
+    // True if projection overlaps but does not necessarily mean the polygons are intersecting yet
+    return !(maxProjA < minProjB or maxProjB < minProjA);
+}
 
 /**
  * @brief Checks whether the two specified convex shapes are overlapping or not
@@ -31,9 +74,32 @@ struct Point {
  * @return Returns true if the two convex shapes are overlapping. Returns false otherwise.
  */
 bool SAT(const std::vector<Point>& shapeA, const std::vector<Point>& shapeB) {
-	// TODO: Implement
+	
+	std::vector<float> projA;
+	std::vector<float> projB;
+	projA.reserve(shapeA.size());
+	projB.reserve(shapeB.size());
 
-	return false;
+	//shapeA points
+	for (int i = 0; i<shapeA.size(); i++){
+		const Point currPoint = shapeA[i];
+		const Point nextPoint = shapeA[(i+1) % shapeA.size()];
+		const Point normAxes = getNormalisedPerpAxis(currPoint, nextPoint);
+		projectPoints(shapeA, shapeB, normAxes, projA, projB);
+
+		if (!(isOverlapping(projA, projB))) return false;
+	}
+
+	for (int i = 0; i<shapeB.size(); i++){
+		const Point currPoint = shapeB[i];
+		const Point nextPoint = shapeB[(i+1) % shapeB.size()];
+		const Point normAxes = getNormalisedPerpAxis(currPoint, nextPoint);
+		projectPoints(shapeA, shapeB, normAxes, projA, projB);
+
+		if (!(isOverlapping(projA, projB))) return false;
+	}
+
+	return true;
 }
 
 // ----------------------------------------------------------------------------------
