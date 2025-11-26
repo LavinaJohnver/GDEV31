@@ -41,8 +41,11 @@ struct Cell {
     /** Vertices forming the boundary of the cell */
     std::vector<Point> vertices;
 
-    /** Placeholder edge color */
-    float edgeColor[3] = {1.0f, 1.0f, 1.0f};
+	/** Edge color */
+	float edgeColor[3] = {1.0f, 1.0f, 1.0f};
+
+	/** Fill color */
+	float fillColor[3] = {0.2f, 0.2f, 0.2f};
 };
 
 /**
@@ -191,6 +194,46 @@ bool ClipLine(
     return true;
 }
 
+// HSV to RGB conversion helper function
+void HSVtoRGB(float h, float s, float v, float* rgb) {
+    float c = v * s;
+    float x = c * (1.0f - fabs(fmod(h / 60.0f, 2.0f) - 1.0f));
+    float m = v - c;
+    
+    float r, g, b;
+    
+    if (h >= 0 && h < 60) {
+        r = c; g = x; b = 0;
+    } else if (h >= 60 && h < 120) {
+        r = x; g = c; b = 0;
+    } else if (h >= 120 && h < 180) {
+        r = 0; g = c; b = x;
+    } else if (h >= 180 && h < 240) {
+        r = 0; g = x; b = c;
+    } else if (h >= 240 && h < 300) {
+        r = x; g = 0; b = c;
+    } else {
+        r = c; g = 0; b = x;
+    }
+    
+    rgb[0] = r + m;
+    rgb[1] = g + m;
+    rgb[2] = b + m;
+}
+
+// Generate unique color for each Voronoi region
+void GenerateUniqueColor(int index, int total, float* color) {
+    // Calculate hue based on index to spread colors evenly across spectrum
+    float hue = fmod(index * 360.0f / total, 360.0f);
+    
+    // Use fixed saturation and value for vibrant, distinct colors
+    float saturation = 0.7f;
+    float value = 0.9f;
+    
+    // Convert HSV to RGB
+    HSVtoRGB(hue, saturation, value, color);
+}
+
 
 /**
  * @brief Constructs Voronoi cells for a given set of site points.
@@ -306,9 +349,11 @@ std::vector<Cell> VoronoiDiagram(std::vector<Point>& sites) {
 		}
 		
 		cell.vertices = polygon;
-		cell.edgeColor[0] = 0.9f;
-		cell.edgeColor[1] = 0.9f;
-		cell.edgeColor[2] = 0.9f;
+		
+		// Generate unique color for this cell (fill), set edges RED by default
+		GenerateUniqueColor(i, sites.size(), cell.fillColor);
+		cell.edgeColor[0] = 1.0f; cell.edgeColor[1] = 0.0f; cell.edgeColor[2] = 0.0f;
+		
 		voronoiCells.push_back(cell);
 	}
 	
@@ -552,83 +597,98 @@ void AppendCircleVertices(const Point& center, float radius, std::vector<Vertex>
 
 void RefreshScene(AppData* data) {
 
-	//EDIT THIS CODE FOR ANY NEW RENDER
-
+	// Build a fresh vertex list each refresh
 	std::vector<Vertex> vertices;
-	// Draw sites as a circle
+
+	// Current test case sites
 	Sites& sites = data->testCases[data->currentTestCase];
-	
-	// Get the data of the voronoi cells
-	std::vector<Cell> voronoiCells = VoronoiDiagram(data->testCases[data->currentTestCase].sitelist);
-	
-	// Helper to check if point is inside polygon
+
+	// Generate Voronoi cells for current test case
+	std::vector<Cell> voronoiCells = VoronoiDiagram(sites.sitelist);
+
+	// Point-in-polygon (ray casting) to locate the player's cell
 	std::function<bool(const Point&, const std::vector<Point>&)> pointInPolygon = [](const Point& p, const std::vector<Point>& poly) -> bool {
-		if (poly.size() < 3) return false;
+		if (poly.empty()) return false;
 		int crossings = 0;
-		for (size_t i = 0; i < poly.size(); ++i) {
-			const Point& v0 = poly[i];
-			const Point& v1 = poly[(i + 1) % poly.size()];
-			if (((v0.y <= p.y && p.y < v1.y) || (v1.y <= p.y && p.y < v0.y)) &&
-				(p.x < (v1.x - v0.x) * (p.y - v0.y) / (v1.y - v0.y) + v0.x)) {
-				crossings++;
+		size_t n = poly.size();
+		for (size_t i = 0; i < n; ++i) {
+			const Point& a = poly[i];
+			const Point& b = poly[(i + 1) % n];
+			bool condY = ((a.y > p.y) != (b.y > p.y));
+			if (condY) {
+				float t = (p.y - a.y) / (b.y - a.y);
+				float xIntersect = a.x + t * (b.x - a.x);
+				if (xIntersect > p.x) crossings++;
 			}
 		}
 		return (crossings % 2) == 1;
 	};
-	
-	// Find which cell contains the player
+
+	// Determine which cell the player is in
 	data->playerCellIndex = -1;
 	for (size_t i = 0; i < voronoiCells.size(); ++i) {
 		if (pointInPolygon(data->player, voronoiCells[i].vertices)) {
-			data->playerCellIndex = (int)i;
+			data->playerCellIndex = static_cast<int>(i);
 			break;
 		}
 	}
-	
-	// Draw Voronoi cells
-	for (size_t cellIdx = 0; cellIdx < voronoiCells.size(); ++cellIdx) {
-		Cell& cell = voronoiCells[cellIdx];
-		bool isPlayerCell = ((int)cellIdx == data->playerCellIndex);
-		
-		// Draw filled polygon if player is in this cell
-		if (isPlayerCell && cell.vertices.size() >= 3) {
-			for (size_t i = 1; i + 1 < cell.vertices.size(); ++i) {
-				Vertex v0 = { cell.vertices[0].x, cell.vertices[0].y, -0.5f, 0.2f, 0.4f, 0.8f };
-				Vertex v1 = { cell.vertices[i].x, cell.vertices[i].y, -0.5f, 0.2f, 0.4f, 0.8f };
-				Vertex v2 = { cell.vertices[i + 1].x, cell.vertices[i + 1].y, -0.5f, 0.2f, 0.4f, 0.8f };
-				vertices.push_back(v0);
-				vertices.push_back(v1);
-				vertices.push_back(v2);
-			}
-		}
-		
-		// Draw cell edges
-		float r = cell.edgeColor[0];
-		float g = cell.edgeColor[1];
-		float b = cell.edgeColor[2];
-		
-		// Highlighted edges for player cell
-		if (isPlayerCell) {
-			r = 0.3f; g = 0.6f; b = 1.0f;
-		}
-		
-		for (size_t i = 0; i < cell.vertices.size(); ++i) {
-			Point p0 = cell.vertices[i];
-			Point p1 = cell.vertices[(i + 1) % cell.vertices.size()];
-			AppendLineVertices(p0, p1, 2.0f, vertices, 0.0f, r, g, b);
-		}
-	}
-	
-	// Draw sites as white circles
-	for (size_t i = 0; i < sites.sitelist.size(); ++i) {
-		AppendCircleVertices(sites.sitelist[i], 5.0f, vertices, 0.2f, 1.0f, 1.0f, 1.0f);
-	}
-	
-	// Draw player as a red circle
-	AppendCircleVertices(data->player, 7.0f, vertices, 0.3f, 1.0f, 0.2f, 0.2f);
 
+	// Draw each Voronoi cell: filled with unique color, edges white; highlight player cell with yellow edges
+	const float EDGE_WIDTH = 2.0f;
+	for (size_t i = 0; i < voronoiCells.size(); ++i) {
+		Cell& cell = voronoiCells[i];
+		const std::vector<Point>& poly = cell.vertices;
+		if (poly.size() < 3) continue; // need at least a triangle to fill
+
+		// Compute centroid for fan triangulation
+		Point centroid{0.0f, 0.0f};
+		for (const Point& v : poly) { centroid.x += v.x; centroid.y += v.y; }
+		centroid.x /= poly.size();
+		centroid.y /= poly.size();
+
+		// Fill fan (brighten fill if player is inside this cell)
+		float fr = cell.fillColor[0];
+		float fg = cell.fillColor[1];
+		float fb = cell.fillColor[2];
+		if (static_cast<int>(i) == data->playerCellIndex) {
+			float t = 0.4f; // blend toward white for emphasis
+			fr = fr * (1.0f - t) + 1.0f * t;
+			fg = fg * (1.0f - t) + 1.0f * t;
+			fb = fb * (1.0f - t) + 1.0f * t;
+		}
+		for (size_t k = 0; k < poly.size(); ++k) {
+			const Point& a = poly[k];
+			const Point& b = poly[(k + 1) % poly.size()];
+			vertices.push_back({ centroid.x, centroid.y, -0.5f, fr, fg, fb });
+			vertices.push_back({ a.x, a.y, -0.5f, fr, fg, fb });
+			vertices.push_back({ b.x, b.y, -0.5f, fr, fg, fb });
+		}
+
+		// Edge color (yellow if player is inside this cell)
+		float er = cell.edgeColor[0];
+		float eg = cell.edgeColor[1];
+		float eb = cell.edgeColor[2];
+		if (static_cast<int>(i) == data->playerCellIndex) { er = 1.0f; eg = 0.0f; eb = 0.0f; }
+		for (size_t k = 0; k < poly.size(); ++k) {
+			const Point& a = poly[k];
+			const Point& b = poly[(k + 1) % poly.size()];
+			AppendLineVertices(a, b, EDGE_WIDTH, vertices, 0.0f, er, eg, eb);
+		}
+	}
+
+	// Draw sites (small circles) on top of edges
+	for (size_t i = 0; i < sites.sitelist.size(); ++i) {
+		float r = 1.0f, g = 1.0f, b = 1.0f;
+		if (static_cast<int>(i) == data->playerCellIndex) { r = 1.0f; g = 1.0f; b = 0.0f; } // highlight site of current cell
+		AppendCircleVertices(sites.sitelist[i], 4.5f, vertices, 0.25f, r, g, b);
+	}
+
+	// Draw player (larger circle) - red
+	AppendCircleVertices(data->player, 6.0f, vertices, 0.5f, 1.0f, 0.0f, 0.0f);
+
+	// Upload to GPU
 	glBindBuffer(GL_ARRAY_BUFFER, data->vbo);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(Vertex) * vertices.size(), vertices.data(), GL_STATIC_DRAW);
+	glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(Vertex), vertices.data(), GL_STATIC_DRAW);
 	data->numVertices = vertices.size();
 }
 
