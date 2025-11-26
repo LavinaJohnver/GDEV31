@@ -4,6 +4,7 @@
 #define _USE_MATH_DEFINES
 #include <cmath>
 #include <vector>
+#include <algorithm>
 
 /**
  * @brief Path to the input file
@@ -21,6 +22,10 @@ struct Point {
 
     /** Y-coordinate */
     float y;
+};
+
+struct Line {
+	float a, b, c; // ax + by + c = 0
 };
 
 /**
@@ -43,6 +48,146 @@ struct Cell {
 struct Sites {
     std::vector<Point> sitelist;
 };
+
+
+// Get the perpendicular line bisecting s1 and s2.
+Line GetPerpBisector(const Point& s1, const Point& s2) {
+	// Midpoint of two sites
+	Point mid {
+		(s1.x + s2.x) * 0.5,
+		(s1.y + s2.y) * 0.5
+	};
+
+	// Direction Vector
+	float dx = s2.x - s1.x;
+	float dy = s2.y - s1.y;
+
+	// Perpendicular Vector to DirectionVector
+	float px = -dy; // a
+	float py = dx; // b
+
+	// Get c by manipulating the line equation ax + by + c = 0
+	// c = -(ax + by)
+	float c = -(px*mid.x + py*mid.y);
+
+	return {px, py, c};
+}
+
+
+// Checks if two lines are intersecting.
+// If true, out will have the point of intersection.
+bool IsLineIntersecting(const Line& l1, const Line& l2, Point& out) {
+	// Use cross product to check if the lines are parallel.
+	// Lines are parallel if cross product is 0.
+	// If parallel, return false.
+	float cross = l1.a * l2.b - l2.a * l1.b;
+    if (fabs(cross) == 0)
+        return false;
+
+	// If not parallel, set out to be the intersection.
+    out.x = (l1.b * l2.c - l2.b * l1.c) / cross;
+    out.y = (l1.a * l2.c - l2.a * l1.c) / cross;
+    return true;
+}
+
+
+// Get the distance between two points.
+float PointsDistance(const Point& p1, const Point& p2) {
+	float dx = p2.x - p1.x;
+	float dy = p2.y - p1.y;
+	return sqrt(dx*dx + dy*dy);
+}
+
+// Takes a point and two site and checks if 
+// the point is closer to the first site. 
+bool IsCloserToSite(const Point& p, const Point& s1, const Point& s2) {
+	float d1 = PointsDistance(p, s1);
+	float d2 = PointsDistance(p, s2);
+	if (d1 < d2) return true; 
+	else return false;
+}
+
+// Takes a center point and a list of points.
+// Arranges them in the list to go counterclockwise
+// around the center. This ensures creating a 
+// cohesive polygon shape.
+std::vector<Point> SortVertices(const Point& center, std::vector<Point> verts) {
+	int n = verts.size();
+	for (int i = 0; i < n; i++) {
+		// Assume i is the smallest angle.
+		int minIndex = i;
+		float angleMin = atan2(verts[i].y - center.y, verts[i].x - center.x); // Get the angle.
+
+		for (int j = i+1; j < n; j++) {
+			float newAngle = atan2(verts[j].y - center.y, verts[j].x - center.x); // Get the angle.
+			// If the new angle is smaller, replace as the smallest angle.
+			if (newAngle < angleMin) {
+				minIndex = j;
+				angleMin = newAngle;
+			}
+		}
+		// Put the smallest angle at index i.
+		if (minIndex != i) {
+			std::swap(verts[i], verts[minIndex]);
+		}
+	}
+    return verts;
+}
+
+
+// Takes 2 points and checks if their line is within the bounds
+// of the window (minX, maxX, minY, maxY). If it is within the
+// window, clip the line so it fits inside.
+bool ClipLine(
+	const Point& p1, const Point& p2, // input points for the line
+	float minX, float maxX, float minY, float maxY, // bounds of the window
+	Point& clipped1, Point& clipped2 // output points for the line
+    ) 
+{
+	// Direction Vector
+    float dx = p2.x - p1.x;
+    float dy = p2.y - p1.y;
+
+	// Entry and Exit Points
+	// Represents % of the line that 
+	// should be in the window.
+    float tEnter = 0.0f;
+    float tExit = 1.0f;
+
+	// Direction of the line relative to the boundaries
+	// of the window.
+    float p[] = {-dx, dx, -dy, dy}; // left, right, bottom, top
+
+	// Distance from p1 to the boundary.
+    float q[] = {p1.x - minX, maxX - p1.x, p1.y - minY, maxY - p1.y};
+
+    for (int i = 0; i < 4; i++) {
+        if (p[i] == 0) { // line is parallel to the boundary
+            if (q[i] < 0) { // line is outside the boundary
+				return false;
+			}
+        } else {
+            float t = q[i] / p[i]; // % along the line segment
+            if (p[i] < 0) {
+				tEnter = std::max(tEnter, t); 
+			}
+            else {
+				tExit = std::min(tExit, t);
+			}
+        }
+    }
+
+	// If line is not in the window, return false.
+    if (tEnter > tExit) return false;
+
+	// Otherwise, this is your new line segment that fits within the window.
+    clipped1.x = p1.x + (tEnter * dx);
+    clipped1.y = p1.y + (tEnter * dy);
+    clipped2.x = p1.x + (tExit * dx);
+    clipped2.y = p1.y + (tExit * dy);
+    return true;
+}
+
 
 /**
  * @brief Constructs Voronoi cells for a given set of site points.
