@@ -57,8 +57,8 @@ struct Sites {
 Line GetPerpBisector(const Point& s1, const Point& s2) {
 	// Midpoint of two sites
 	Point mid {
-		(s1.x + s2.x) * 0.5,
-		(s1.y + s2.y) * 0.5
+		(s1.x + s2.x) * 0.5f,
+		(s1.y + s2.y) * 0.5f
 	};
 
 	// Direction Vector
@@ -197,115 +197,121 @@ bool ClipLine(
  * 
  * @param sites List of site points
  * @return std::vector<Cell> Generated Voronoi cells
- * 
- * 
  */
 std::vector<Cell> VoronoiDiagram(std::vector<Point>& sites) {
-	// Helper types and functions -------------------------------------------------
-	struct Line {
-		Point p; // point on the line (midpoint)
-		Point v; // normal/direction vector (from site to other)
-	};
-
+	int WINDOW_WIDTH = 1280;
+	int WINDOW_HEIGHT = 720;
+	float minX = 0.0f, maxX = WINDOW_WIDTH * 1.0f;
+	float minY = 0.0f, maxY = WINDOW_HEIGHT * 1.0f;
+	
+	std::vector<Cell> voronoiCells;
+	
+	// Lambda helper functions for vector operations
 	float (*dot)(const Point&, const Point&) = [](const Point& a, const Point& b) -> float {
 		return a.x * b.x + a.y * b.y;
 	};
-
+	
 	Point (*sub)(const Point&, const Point&) = [](const Point& a, const Point& b) -> Point {
 		return Point{ a.x - b.x, a.y - b.y };
 	};
-
+	
 	Point (*add)(const Point&, const Point&) = [](const Point& a, const Point& b) -> Point {
 		return Point{ a.x + b.x, a.y + b.y };
 	};
-
+	
 	Point (*mul)(const Point&, float) = [](const Point& a, float s) -> Point {
 		return Point{ a.x * s, a.y * s };
 	};
-
-	std::function<bool(const Point&, const Point&, const Line&, float&)> IntersectSegmentWithLine = [&](const Point& a, const Point& b, const Line& L, float& outT) -> bool {
-		// Solve for t in a + t*(b-a) such that ( (a + t*(b-a) - L.p) dot L.v ) = 0
+	
+	// Helper struct for half-plane clipping
+	struct HalfPlane {
+		Point p;  // point on the line (midpoint)
+		Point n;  // normal vector (pointing toward the site we're keeping)
+	};
+	
+	// Intersect a line segment with a half-plane boundary
+	std::function<bool(const Point&, const Point&, const HalfPlane&, float&)> intersectSegment = [&](const Point& a, const Point& b, const HalfPlane& hp, float& t) -> bool {
 		Point ab = sub(b, a);
-		float denom = dot(ab, L.v);
-		if (fabsf(denom) < 1e-9f) return false; // parallel
-		outT = dot(sub(L.p, a), L.v) / denom;
-		return (outT >= -1e-6f && outT <= 1.0f + 1e-6f);
+		float denom = dot(ab, hp.n);
+		if (fabsf(denom) < 1e-9f) return false;
+		t = dot(sub(hp.p, a), hp.n) / denom;
+		return (t >= -1e-6f && t <= 1.0f + 1e-6f);
 	};
-
-	// Sutherland-Hodgman polygon clipping against half-plane defined by 'clipLine'.
-	std::function<std::vector<Point>(const std::vector<Point>&, const Line&, const Point&)> ClipPolygonByLine = [&](const std::vector<Point>& polygon, const Line& clipLine, const Point& /*insideSite*/) -> std::vector<Point> {
-		std::vector<Point> out;
-		if (polygon.empty()) return out;
-
+	
+	// Sutherland-Hodgman clipping against half-plane
+	std::function<std::vector<Point>(const std::vector<Point>&, const HalfPlane&)> clipPolygon = [&](const std::vector<Point>& polygon, const HalfPlane& hp) -> std::vector<Point> {
+		std::vector<Point> output;
+		if (polygon.empty()) return output;
+		
 		std::function<bool(const Point&)> isInside = [&](const Point& q) -> bool {
-			// inside if (q - clipLine.p) dot clipLine.v <= 0 => q is on the side of the site
-			return dot(sub(q, clipLine.p), clipLine.v) <= 1e-6f;
+			return dot(sub(q, hp.p), hp.n) <= 1e-6f;
 		};
-
-		Point A = polygon.back();
-		bool Ainside = isInside(A);
-		for (size_t i = 0; i < polygon.size(); ++i) {
-			Point B = polygon[i];
-			bool Binside = isInside(B);
-
-			if (Ainside && Binside) {
-				out.push_back(B);
+		
+		Point prev = polygon.back();
+		bool prevInside = isInside(prev);
+		
+		for (const Point& curr : polygon) {
+			bool currInside = isInside(curr);
+			
+			if (prevInside && currInside) {
+				output.push_back(curr);
 			}
-			else if (Ainside && !Binside) {
+			else if (prevInside && !currInside) {
 				float t;
-				if (IntersectSegmentWithLine(A, B, clipLine, t)) {
-					out.push_back( add(A, mul(sub(B, A), t)) );
+				if (intersectSegment(prev, curr, hp, t)) {
+					output.push_back(add(prev, mul(sub(curr, prev), t)));
 				}
 			}
-			else if (!Ainside && Binside) {
+			else if (!prevInside && currInside) {
 				float t;
-				if (IntersectSegmentWithLine(A, B, clipLine, t)) {
-					out.push_back( add(A, mul(sub(B, A), t)) );
+				if (intersectSegment(prev, curr, hp, t)) {
+					output.push_back(add(prev, mul(sub(curr, prev), t)));
 				}
-				out.push_back(B);
+				output.push_back(curr);
 			}
-			A = B; Ainside = Binside;
+			
+			prev = curr;
+			prevInside = currInside;
 		}
-
-		return out;
+		
+		return output;
 	};
-
-	std::function<std::vector<Point>(const Point&, const std::vector<Point>&, float, float, float, float)> ComputeCellVertices = [&](const Point& site, const std::vector<Point>& allSites,
-							   float minX, float maxX, float minY, float maxY) -> std::vector<Point> {
-		std::vector<Point> cell;
-		// rectangle CCW
-		cell.push_back({ minX, minY });
-		cell.push_back({ maxX, minY });
-		cell.push_back({ maxX, maxY });
-		cell.push_back({ minX, maxY });
-
-		for (const Point& other : allSites) {
-			if (fabsf(other.x - site.x) < 1e-6f && fabsf(other.y - site.y) < 1e-6f) continue;
-
-			Point m = { (site.x + other.x) * 0.5f, (site.y + other.y) * 0.5f };
-			Point v = sub(other, site); // normal toward the other site
-
-			Line bis; bis.p = m; bis.v = v;
-
-			cell = ClipPolygonByLine(cell, bis, site);
-			if (cell.empty()) break;
-		}
-
-		return cell;
-	};
-
-	std::vector<Cell> voronoiCells;
-	int WINDOW_WIDTH = 1280;
-	int WINDOW_HEIGHT = 720;
-	float minX = 0.0f, minY = 0.0f, maxX = WINDOW_WIDTH * 1.0f, maxY = WINDOW_HEIGHT * 1.0f;
+	
+	// Compute cell for each site
 	for (size_t i = 0; i < sites.size(); ++i) {
 		Cell cell;
 		cell.site = sites[i];
-		cell.vertices = ComputeCellVertices(sites[i], sites, minX, maxX, minY, maxY);
-		cell.edgeColor[0] = 0.9f; cell.edgeColor[1] = 0.9f; cell.edgeColor[2] = 0.9f;
+		
+		// Start with window rectangle (counter-clockwise)
+		std::vector<Point> polygon;
+		polygon.push_back({minX, minY});
+		polygon.push_back({maxX, minY});
+		polygon.push_back({maxX, maxY});
+		polygon.push_back({minX, maxY});
+		
+		// Clip against each other site's perpendicular bisector
+		for (size_t j = 0; j < sites.size(); ++j) {
+			if (i == j) continue;
+			
+			// Midpoint and normal (pointing from j toward i)
+			Point mid = { (sites[i].x + sites[j].x) * 0.5f, (sites[i].y + sites[j].y) * 0.5f };
+			Point normal = sub(sites[j], sites[i]);  // Points toward j, so we keep the i side
+			
+			HalfPlane hp;
+			hp.p = mid;
+			hp.n = normal;
+			
+			polygon = clipPolygon(polygon, hp);
+			if (polygon.empty()) break;
+		}
+		
+		cell.vertices = polygon;
+		cell.edgeColor[0] = 0.9f;
+		cell.edgeColor[1] = 0.9f;
+		cell.edgeColor[2] = 0.9f;
 		voronoiCells.push_back(cell);
 	}
-
+	
 	return voronoiCells;
 }
 
@@ -462,19 +468,19 @@ void KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
 		float moveSpeed = 5.0f;
 		bool moved = false;
 		
-		if (key == GLFW_KEY_W || key == GLFW_KEY_UP) {
+		if (key == GLFW_KEY_W ) {
 			appData->player.y += moveSpeed;
 			moved = true;
 		}
-		if (key == GLFW_KEY_S || key == GLFW_KEY_DOWN) {
+		if (key == GLFW_KEY_S ) {
 			appData->player.y -= moveSpeed;
 			moved = true;
 		}
-		if (key == GLFW_KEY_A || key == GLFW_KEY_LEFT) {
+		if (key == GLFW_KEY_A ) {
 			appData->player.x -= moveSpeed;
 			moved = true;
 		}
-		if (key == GLFW_KEY_D || key == GLFW_KEY_RIGHT) {
+		if (key == GLFW_KEY_D ) {
 			appData->player.x += moveSpeed;
 			moved = true;
 		}
