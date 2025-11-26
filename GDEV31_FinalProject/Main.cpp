@@ -4,6 +4,9 @@
 #define _USE_MATH_DEFINES
 #include <cmath>
 #include <vector>
+#include <string>
+#include <cfloat>
+#include <functional>
 
 /**
  * @brief Path to the input file
@@ -53,17 +56,112 @@ struct Sites {
  * 
  */
 std::vector<Cell> VoronoiDiagram(std::vector<Point>& sites) {
-    std::vector<Cell> voronoiCells;
+	// Helper types and functions -------------------------------------------------
+	struct Line {
+		Point p; // point on the line (midpoint)
+		Point v; // normal/direction vector (from site to other)
+	};
 
-    // TO-DO. Each site currently gets an empty cell (no edges or vertices).
-    for (auto& s : sites) {
-        Cell cell;
-        cell.site = s;
-        cell.vertices = {}; 
-        voronoiCells.push_back(cell);
-    }
+	float (*dot)(const Point&, const Point&) = [](const Point& a, const Point& b) -> float {
+		return a.x * b.x + a.y * b.y;
+	};
 
-    return voronoiCells;
+	Point (*sub)(const Point&, const Point&) = [](const Point& a, const Point& b) -> Point {
+		return Point{ a.x - b.x, a.y - b.y };
+	};
+
+	Point (*add)(const Point&, const Point&) = [](const Point& a, const Point& b) -> Point {
+		return Point{ a.x + b.x, a.y + b.y };
+	};
+
+	Point (*mul)(const Point&, float) = [](const Point& a, float s) -> Point {
+		return Point{ a.x * s, a.y * s };
+	};
+
+	std::function<bool(const Point&, const Point&, const Line&, float&)> IntersectSegmentWithLine = [&](const Point& a, const Point& b, const Line& L, float& outT) -> bool {
+		// Solve for t in a + t*(b-a) such that ( (a + t*(b-a) - L.p) dot L.v ) = 0
+		Point ab = sub(b, a);
+		float denom = dot(ab, L.v);
+		if (fabsf(denom) < 1e-9f) return false; // parallel
+		outT = dot(sub(L.p, a), L.v) / denom;
+		return (outT >= -1e-6f && outT <= 1.0f + 1e-6f);
+	};
+
+	// Sutherland-Hodgman polygon clipping against half-plane defined by 'clipLine'.
+	std::function<std::vector<Point>(const std::vector<Point>&, const Line&, const Point&)> ClipPolygonByLine = [&](const std::vector<Point>& polygon, const Line& clipLine, const Point& /*insideSite*/) -> std::vector<Point> {
+		std::vector<Point> out;
+		if (polygon.empty()) return out;
+
+		std::function<bool(const Point&)> isInside = [&](const Point& q) -> bool {
+			// inside if (q - clipLine.p) dot clipLine.v <= 0 => q is on the side of the site
+			return dot(sub(q, clipLine.p), clipLine.v) <= 1e-6f;
+		};
+
+		Point A = polygon.back();
+		bool Ainside = isInside(A);
+		for (size_t i = 0; i < polygon.size(); ++i) {
+			Point B = polygon[i];
+			bool Binside = isInside(B);
+
+			if (Ainside && Binside) {
+				out.push_back(B);
+			}
+			else if (Ainside && !Binside) {
+				float t;
+				if (IntersectSegmentWithLine(A, B, clipLine, t)) {
+					out.push_back( add(A, mul(sub(B, A), t)) );
+				}
+			}
+			else if (!Ainside && Binside) {
+				float t;
+				if (IntersectSegmentWithLine(A, B, clipLine, t)) {
+					out.push_back( add(A, mul(sub(B, A), t)) );
+				}
+				out.push_back(B);
+			}
+			A = B; Ainside = Binside;
+		}
+
+		return out;
+	};
+
+	std::function<std::vector<Point>(const Point&, const std::vector<Point>&, float, float, float, float)> ComputeCellVertices = [&](const Point& site, const std::vector<Point>& allSites,
+							   float minX, float maxX, float minY, float maxY) -> std::vector<Point> {
+		std::vector<Point> cell;
+		// rectangle CCW
+		cell.push_back({ minX, minY });
+		cell.push_back({ maxX, minY });
+		cell.push_back({ maxX, maxY });
+		cell.push_back({ minX, maxY });
+
+		for (const Point& other : allSites) {
+			if (fabsf(other.x - site.x) < 1e-6f && fabsf(other.y - site.y) < 1e-6f) continue;
+
+			Point m = { (site.x + other.x) * 0.5f, (site.y + other.y) * 0.5f };
+			Point v = sub(other, site); // normal toward the other site
+
+			Line bis; bis.p = m; bis.v = v;
+
+			cell = ClipPolygonByLine(cell, bis, site);
+			if (cell.empty()) break;
+		}
+
+		return cell;
+	};
+
+	std::vector<Cell> voronoiCells;
+	int WINDOW_WIDTH = 1280;
+	int WINDOW_HEIGHT = 720;
+	float minX = 0.0f, minY = 0.0f, maxX = WINDOW_WIDTH * 1.0f, maxY = WINDOW_HEIGHT * 1.0f;
+	for (size_t i = 0; i < sites.size(); ++i) {
+		Cell cell;
+		cell.site = sites[i];
+		cell.vertices = ComputeCellVertices(sites[i], sites, minX, maxX, minY, maxY);
+		cell.edgeColor[0] = 0.9f; cell.edgeColor[1] = 0.9f; cell.edgeColor[2] = 0.9f;
+		voronoiCells.push_back(cell);
+	}
+
+	return voronoiCells;
 }
 
 
@@ -103,8 +201,8 @@ struct AppData {
 	int currentTestCase;
 	GLuint vbo;
 	size_t numVertices;
-	bool showTriangulation;
 	Point player;
+	int playerCellIndex;
 };
 struct Vertex {
 	GLfloat x, y, z;
@@ -206,12 +304,45 @@ void KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
 	if (action == GLFW_PRESS) {
 		if (key == GLFW_KEY_LEFT) {
 			appData->currentTestCase = ((appData->currentTestCase - 1) + appData->testCases.size()) % appData->testCases.size();
+			RefreshScene(appData);
 		}
 		else if (key == GLFW_KEY_RIGHT) {
 			appData->currentTestCase = (appData->currentTestCase + 1) % appData->testCases.size();
+			RefreshScene(appData);
 		}
-
-		RefreshScene(appData);
+	}
+	
+	// Handle WASD movement (continuous while held)
+	if (action == GLFW_PRESS || action == GLFW_REPEAT) {
+		float moveSpeed = 5.0f;
+		bool moved = false;
+		
+		if (key == GLFW_KEY_W || key == GLFW_KEY_UP) {
+			appData->player.y += moveSpeed;
+			moved = true;
+		}
+		if (key == GLFW_KEY_S || key == GLFW_KEY_DOWN) {
+			appData->player.y -= moveSpeed;
+			moved = true;
+		}
+		if (key == GLFW_KEY_A || key == GLFW_KEY_LEFT) {
+			appData->player.x -= moveSpeed;
+			moved = true;
+		}
+		if (key == GLFW_KEY_D || key == GLFW_KEY_RIGHT) {
+			appData->player.x += moveSpeed;
+			moved = true;
+		}
+		
+		// Clamp player to window bounds
+		if (appData->player.x < 0) appData->player.x = 0;
+		if (appData->player.x > WINDOW_WIDTH) appData->player.x = WINDOW_WIDTH;
+		if (appData->player.y < 0) appData->player.y = 0;
+		if (appData->player.y > WINDOW_HEIGHT) appData->player.y = WINDOW_HEIGHT;
+		
+		if (moved) {
+			RefreshScene(appData);
+		}
 	}
 }
 
@@ -275,23 +406,75 @@ void RefreshScene(AppData* data) {
 	std::vector<Vertex> vertices;
 	// Draw sites as a circle
 	Sites& sites = data->testCases[data->currentTestCase];
-	for (size_t i = 0; i < sites.sitelist.size(); ++i) {
-		AppendCircleVertices(sites.sitelist[i], 5.0f, vertices, 0.0f, 1.0f, 1.0f, 1.0f);
-	}
-
+	
 	// Get the data of the voronoi cells
 	std::vector<Cell> voronoiCells = VoronoiDiagram(data->testCases[data->currentTestCase].sitelist);
-
 	
-	for (Cell cell : voronoiCells) {
-
-        for (int i = 0; i < cell.vertices.size(); ++i) {
-            Point p0 = cell.vertices[i];
-            Point p1 = cell.vertices[(i + 1) % cell.vertices.size()];
-            AppendLineVertices(p0, p1, 2.0f, vertices, 0.0f, cell.edgeColor[0], cell.edgeColor[1], cell.edgeColor[2]);
-        }
-
-    }
+	// Helper to check if point is inside polygon
+	std::function<bool(const Point&, const std::vector<Point>&)> pointInPolygon = [](const Point& p, const std::vector<Point>& poly) -> bool {
+		if (poly.size() < 3) return false;
+		int crossings = 0;
+		for (size_t i = 0; i < poly.size(); ++i) {
+			const Point& v0 = poly[i];
+			const Point& v1 = poly[(i + 1) % poly.size()];
+			if (((v0.y <= p.y && p.y < v1.y) || (v1.y <= p.y && p.y < v0.y)) &&
+				(p.x < (v1.x - v0.x) * (p.y - v0.y) / (v1.y - v0.y) + v0.x)) {
+				crossings++;
+			}
+		}
+		return (crossings % 2) == 1;
+	};
+	
+	// Find which cell contains the player
+	data->playerCellIndex = -1;
+	for (size_t i = 0; i < voronoiCells.size(); ++i) {
+		if (pointInPolygon(data->player, voronoiCells[i].vertices)) {
+			data->playerCellIndex = (int)i;
+			break;
+		}
+	}
+	
+	// Draw Voronoi cells
+	for (size_t cellIdx = 0; cellIdx < voronoiCells.size(); ++cellIdx) {
+		Cell& cell = voronoiCells[cellIdx];
+		bool isPlayerCell = ((int)cellIdx == data->playerCellIndex);
+		
+		// Draw filled polygon if player is in this cell
+		if (isPlayerCell && cell.vertices.size() >= 3) {
+			for (size_t i = 1; i + 1 < cell.vertices.size(); ++i) {
+				Vertex v0 = { cell.vertices[0].x, cell.vertices[0].y, -0.5f, 0.2f, 0.4f, 0.8f };
+				Vertex v1 = { cell.vertices[i].x, cell.vertices[i].y, -0.5f, 0.2f, 0.4f, 0.8f };
+				Vertex v2 = { cell.vertices[i + 1].x, cell.vertices[i + 1].y, -0.5f, 0.2f, 0.4f, 0.8f };
+				vertices.push_back(v0);
+				vertices.push_back(v1);
+				vertices.push_back(v2);
+			}
+		}
+		
+		// Draw cell edges
+		float r = cell.edgeColor[0];
+		float g = cell.edgeColor[1];
+		float b = cell.edgeColor[2];
+		
+		// Highlighted edges for player cell
+		if (isPlayerCell) {
+			r = 0.3f; g = 0.6f; b = 1.0f;
+		}
+		
+		for (size_t i = 0; i < cell.vertices.size(); ++i) {
+			Point p0 = cell.vertices[i];
+			Point p1 = cell.vertices[(i + 1) % cell.vertices.size()];
+			AppendLineVertices(p0, p1, 2.0f, vertices, 0.0f, r, g, b);
+		}
+	}
+	
+	// Draw sites as white circles
+	for (size_t i = 0; i < sites.sitelist.size(); ++i) {
+		AppendCircleVertices(sites.sitelist[i], 5.0f, vertices, 0.2f, 1.0f, 1.0f, 1.0f);
+	}
+	
+	// Draw player as a red circle
+	AppendCircleVertices(data->player, 7.0f, vertices, 0.3f, 1.0f, 0.2f, 0.2f);
 
 	glBindBuffer(GL_ARRAY_BUFFER, data->vbo);
 	glBufferData(GL_ARRAY_BUFFER, sizeof(Vertex) * vertices.size(), vertices.data(), GL_STATIC_DRAW);
@@ -302,8 +485,8 @@ int main(int argc, char* argv[]) {
 	srand(time(nullptr));
 
 	AppData appData = {};
-	appData.showTriangulation = true;
 	appData.player = { WINDOW_WIDTH / 2.0f, WINDOW_HEIGHT / 2.0f };
+	appData.playerCellIndex = -1;
 	std::ifstream file(INPUT_FILE);
 	if (file.fail())
 	{
@@ -342,7 +525,7 @@ int main(int argc, char* argv[]) {
 	glfwWindowHint(GLFW_RESIZABLE, GL_FALSE);
 	glfwWindowHint(GLFW_SAMPLES, 4);
 
-	GLFWwindow* window = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "LastNameLastNameLastName - Voronoi Diagram", nullptr, nullptr);
+	GLFWwindow* window = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "EspirituLaviñaVillanueva - Voronoi Diagram", nullptr, nullptr);
 	if (!window) {
 		std::cerr << "Cannot create window.";
 		return -1;
